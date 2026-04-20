@@ -2,6 +2,7 @@
 #include <unordered_set>
 #include "zobrist.hpp"
 #include "boardstate.hpp"
+#include <cassert>
 #include <iostream>
 
 boardstate::boardstate() {
@@ -18,6 +19,19 @@ boardstate::boardstate() {
     blackCaptures = 0;
     whiteCaptures = 0;
     zobristHash = 0;
+    for (int i = 0; i < 361; i++) {
+        parent[i] = i;
+        liberties[i] = 0;
+        size[i] = 1;
+        next[i] = i;  // circular linked list, points to self
+    }
+}
+
+void boardstate::recomputeGroupLiberties(int pos) {
+    int root = find(pos);
+    const bitboard& color = (black.w[pos/64] & (1ULL << (pos%64))) ? black : white;
+    bitboard grp = getGroup(pos, color);
+    liberties[root] = getLiberties(grp).countStones();
 }
 
 bitboard boardstate::getGroup(int pos, const bitboard& color) const{
@@ -69,89 +83,103 @@ bitboard boardstate::getLiberties(bitboard group) const {
 }
 
 void boardstate::resolveCaptures(int pos) {
-    bitboard& enemy = blackMove ? white : black;
-    int& captureCount = blackMove ? blackCaptures : whiteCaptures;
-
-    bitboard placed{};
-    placed.w[pos / 64] = (1ULL << (pos % 64));
-
-    bitboard neighbors{};
-    for(int i = 0; i < 6; ++i){
-        neighbors.w[i] = placed.upShift().w[i]
-                       | placed.downShift().w[i]
-                       | placed.leftShift().w[i]
-                       | placed.rightShift().w[i];
-    }
-
-    bitboard toCheck{};
-    for(int i = 0; i < 6; ++i)
-        toCheck.w[i] = neighbors.w[i] & enemy.w[i];
-
-    while(true){
-        int foundPos = -1;
-        for(int i = 0; i < 6; ++i){
-            if(toCheck.w[i]){
-                foundPos = i * 64 + __builtin_ctzll(toCheck.w[i]);
-                break;
+    bitboard& enemy    = blackMove ? white : black;
+    bitboard& friendly = blackMove ? black : white;
+    int& captureCount  = blackMove ? blackCaptures : whiteCaptures;
+ 
+    int nbrs[4];
+    int nbCount = getNeighbors(pos, nbrs);
+ 
+    // collect roots of friendly groups adjacent to pos — we'll recompute their
+    // liberties after all captures are resolved
+    int friendlyRoots[4];
+    int friendlyRootCount = 0;
+ 
+    for (int i = 0; i < nbCount; i++) {
+        int nb = nbrs[i];
+        if (!(enemy.w[nb / 64] & (1ULL << (nb % 64)))) {
+            // track friendly neighbors for later recompute
+            if (friendly.w[nb / 64] & (1ULL << (nb % 64))) {
+                int r = find(nb);
+                bool seen = false;
+                for(int k = 0; k < friendlyRootCount; k++)
+                    if(friendlyRoots[k] == r) { seen = true; break; }
+                if(!seen) friendlyRoots[friendlyRootCount++] = r;
             }
+            continue;
         }
-        if(foundPos == -1) break;
-
-        bitboard group = getGroup(foundPos, enemy);
-        bitboard liberties = getLiberties(group);
-
-        bool dead = true;
-        for(int i = 0; i < 6; ++i){
-            if(liberties.w[i]){ dead = false; break; }
+ 
+        int root = find(nb);
+        // use liberties array to check — but now it's always correct since we
+        // recompute after every move, so this check is valid
+        if (liberties[root] != 0) continue;
+ 
+        // collect dying stones first, then process
+        int dying_stones[361];
+        int dying_count = 0;
+        int cur = root;
+        do {
+            dying_stones[dying_count++] = cur;
+            cur = next[cur];
+        } while (cur != root);
+        captureCount += dying_count;
+ 
+        for (int d = 0; d < dying_count; d++) {
+            int dying = dying_stones[d];
+ 
+            zobristHash ^= blackMove ? Zobrist::white[dying] : Zobrist::black[dying];
+            enemy.w[dying / 64] &= ~(1ULL << (dying % 64));
+ 
+            // reset union-find for this stone
+            parent[dying]    = dying;
+            size[dying]      = 1;
+            next[dying]      = dying;
+            liberties[dying] = 0;
         }
-
-        if(dead){
-          captureCount += group.countStones();
-            for(int i = 0; i < 6; ++i){
-                uint64_t dying = group.w[i];
-                while(dying){
-                    int bit = __builtin_ctzll(dying);
-                    int capturedPos = i * 64 + bit;
-                    if(blackMove){
-                        zobristHash ^= Zobrist::white[capturedPos];
-                    } else {
-                        zobristHash ^= Zobrist::black[capturedPos];
-                    }
-                    dying &= dying - 1;
-                }
-                enemy.w[i] &= ~group.w[i];
-            }
-        }
-
-        for(int i = 0; i < 6; ++i)
-            toCheck.w[i] &= ~group.w[i];
     }
-
+ 
     // keep empty in sync
-    for(int i = 0; i < 6; ++i)
+    for (int i = 0; i < 6; ++i)
         empty.w[i] = ~(black.w[i] | white.w[i]);
-    // mask off invalid bits in last word
     empty.w[5] &= (1ULL << 41) - 1;
-  }
+ 
+    // recompute liberties for friendly groups that were adjacent to captures
+    for(int i = 0; i < friendlyRootCount; i++)
+        recomputeGroupLiberties(friendlyRoots[i]);
+}
 
 bool boardstate::isLegal(int pos, const std::unordered_set<uint64_t>& history) const {
-    if(!(empty.w[pos / 64] & (1ULL << (pos % 64))))
+    if (!(empty.w[pos / 64] & (1ULL << (pos % 64))))
         return false;
-    boardstate next = makeMove(pos);
-    const bitboard& friendly = next.blackMove ? next.white : next.black;
-    bitboard group = next.getGroup(pos, friendly);
-    bitboard liberties = next.getLiberties(group);
-    for(int i = 0; i < 6; ++i)
-        if(liberties.w[i])
-            return !history.count(next.zobristHash);
-    return false;
+
+    const bitboard& friendly = blackMove ? black : white;
+    const bitboard& enemy    = blackMove ? white : black;
+
+    int nbrs[4];
+    int nbCount = getNeighbors(pos, nbrs);
+
+    for (int i = 0; i < nbCount; i++) {
+        int nb = nbrs[i];
+        if (empty.w[nb / 64] & (1ULL << (nb % 64)))
+            goto kocheck;                          // direct liberty
+        if (friendly.w[nb / 64] & (1ULL << (nb % 64)))
+            if (liberties[find(nb)] > 1)
+                goto kocheck;                      // connects to safe group
+        if (enemy.w[nb / 64] & (1ULL << (nb % 64)))
+            if (liberties[find(nb)] == 1)
+                goto kocheck;                      // captures enemy
+    }
+    return false;                                  // suicide
+
+kocheck:
+    boardstate result = makeMove(pos);
+    return !history.count(result.zobristHash);
 }
 
 bitboard boardstate::legalMoves(const std::unordered_set<uint64_t>& history) const {
     bitboard moves;
     for(int i = 0; i < 6; ++i)
         moves.w[i] = 0;
-
     for(int i = 0; i < 6; ++i){
         uint64_t word = empty.w[i];
         while(word){
@@ -164,46 +192,69 @@ bitboard boardstate::legalMoves(const std::unordered_set<uint64_t>& history) con
     }
     return moves;
   }
-bool boardstate::isLegalFast(int pos) const {
-    if(!(empty.w[pos / 64] & (1ULL << (pos % 64))))
-        return false;
-    // skip superko for MCTS expansion, just check suicide
-    boardstate next = *this;
-    bitboard& friendly = next.blackMove ? next.black : next.white;
-    friendly.w[pos / 64] |= (1ULL << (pos % 64));
-    next.empty.w[pos / 64] &= ~(1ULL << (pos % 64));
-    next.resolveCaptures(pos);
-    const bitboard& f = next.blackMove ? next.black : next.white;
-    bitboard group = next.getGroup(pos, f);
-    bitboard liberties = next.getLiberties(group);
-    for(int i = 0; i < 6; ++i)
-        if(liberties.w[i]) return true;
-    return false;
-}
 
 boardstate boardstate::makeMove(int pos) const {
     boardstate next = *this;
-
+ 
     bitboard& friendly = next.blackMove ? next.black : next.white;
+ 
+    // place stone
     friendly.w[pos / 64] |= (1ULL << (pos % 64));
     next.empty.w[pos / 64] &= ~(1ULL << (pos % 64));
-
-    if(next.blackMove){
-      next.zobristHash ^= Zobrist::black[pos];
-    } else {
-    next.zobristHash ^= Zobrist::white[pos];
+    next.zobristHash ^= next.blackMove ? Zobrist::black[pos] : Zobrist::white[pos];
+ 
+    // init new stone as its own group
+    next.parent[pos]    = pos;
+    next.size[pos]      = 1;
+    next.next[pos]      = pos;
+    next.liberties[pos] = 0;
+ 
+    // merge with adjacent friendly groups
+    int nbrs[4];
+    int nbCount = getNeighbors(pos, nbrs);
+ 
+    for (int i = 0; i < nbCount; i++) {
+        int nb = nbrs[i];
+        if (friendly.w[nb / 64] & (1ULL << (nb % 64))) {
+            next.mergeGroups(pos, next.find(nb));
+        }
     }
-    
+    // resolve captures (removes dead enemy groups, resyncs empty,
+    // recomputes liberties for friendly groups adjacent to captures)
     next.resolveCaptures(pos);
-
-    // flip side to move at end of makeMove and makePass:
+ 
+    // recompute liberties for the placed stone's merged group
+    // (resolveCaptures handles groups affected by captures, but
+    //  the placed group itself needs recompute for its own liberties)
+    next.recomputeGroupLiberties(pos);
+ 
+    // also recompute any surviving enemy groups adjacent to pos
+    // (their liberties decreased by 1 due to the placed stone)
+    const bitboard& enemy = next.blackMove ? next.black : next.white;
+    for (int i = 0; i < nbCount; i++) {
+        int nb = nbrs[i];
+        if (enemy.w[nb / 64] & (1ULL << (nb % 64)))
+            next.recomputeGroupLiberties(nb);
+    }
+ 
     next.zobristHash ^= Zobrist::sideToMove;
-
     next.blackMove = !next.blackMove;
     next.passCount = 0;
-
+ 
+#ifndef NDEBUG
+    const bitboard& f = next.blackMove ? next.white : next.black;
+    bitboard grp = next.getGroup(pos, f);
+    bitboard libs = next.getLiberties(grp);
+    if(libs.countStones() != next.liberties[next.find(pos)]){
+        std::cout << "pos: " << pos << " (" << pos/19 << "," << pos%19 << ")\n";
+        std::cout << "expected liberties: " << libs.countStones() << "\n";
+        std::cout << "got liberties:      " << next.liberties[next.find(pos)] << "\n";
+        std::cout << "diff: " << (int)next.liberties[next.find(pos)] - (int)libs.countStones() << "\n";
+    }
+    assert(libs.countStones() == next.liberties[next.find(pos)]);
+#endif
     return next;
-  }
+}
 
 boardstate boardstate::makePass() const {
     boardstate next = *this;
@@ -212,6 +263,7 @@ boardstate boardstate::makePass() const {
     next.passCount++;
     return next;
   }
+
 
 bool boardstate::isTerminal() const {
     return passCount >= 2;
