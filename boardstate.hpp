@@ -4,6 +4,7 @@
 #include "bitboard.hpp"
 #include <unordered_set>
 #include "zobrist.hpp"
+#include <cstdint>
 
 
 struct boardstate{
@@ -15,10 +16,10 @@ struct boardstate{
   uint64_t zobristHash;
   int blackCaptures;
   int whiteCaptures;
-  int parent[361];      // union-find: group representative
-  int liberties[361];   // liberty count per group root
-  int size[361];        // group size
-  int next[361];        // linked list of stones in group
+  uint16_t parent[361];
+  uint8_t  liberties[361];
+  uint16_t size[361];
+  uint16_t next[361];
   
   boardstate();
   bitboard getGroup(int pos, const bitboard& color) const;
@@ -26,6 +27,7 @@ struct boardstate{
   void resolveCaptures(int pos);
   void recomputeGroupLiberties(int pos);
   bool isLegal(int pos, const std::unordered_set<uint64_t>& history) const;
+  bool isLegalFast(int pos) const;
   bitboard legalMoves(const std::unordered_set<uint64_t>& history) const;
 
   boardstate makeMove(int pos) const;
@@ -52,6 +54,23 @@ struct boardstate{
     parent[rootB] = ra;
     size[ra] += size[rootB];
     std::swap(next[ra], next[rootB]);
+}
+  bool isLegalNoKo(int pos) const {
+    if (!(empty.w[pos / 64] & (1ULL << (pos % 64))))
+        return false;
+    const bitboard& friendly = blackMove ? black : white;
+    const bitboard& enemy    = blackMove ? white : black;
+    int nbrs[4];
+    int nbCount = getNeighbors(pos, nbrs);
+    for (int i = 0; i < nbCount; i++) {
+        int nb = nbrs[i];
+        if (empty.w[nb / 64] & (1ULL << (nb % 64)))         return true;
+        if (friendly.w[nb / 64] & (1ULL << (nb % 64)))
+            if (liberties[find(nb)] > 1)                     return true;
+        if (enemy.w[nb / 64] & (1ULL << (nb % 64)))
+            if (liberties[find(nb)] == 1)                    return true;
+    }
+    return false;
 }
   
 

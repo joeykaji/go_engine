@@ -176,6 +176,23 @@ kocheck:
     return !history.count(result.zobristHash);
 }
 
+bool boardstate::isLegalFast(int pos) const {
+    if (!(empty.w[pos/64] & (1ULL << (pos%64)))) return false;
+    // skip ko check — acceptable for rollouts
+    const bitboard& friendly = blackMove ? black : white;
+    const bitboard& enemy    = blackMove ? white : black;
+    int nbrs[4]; int nbCount = getNeighbors(pos, nbrs);
+    for (int i = 0; i < nbCount; i++) {
+        int nb = nbrs[i];
+        if (empty.w[nb/64] & (1ULL << (nb%64))) return true;
+        if (friendly.w[nb/64] & (1ULL << (nb%64)))
+            if (liberties[find(nb)] > 1) return true;
+        if (enemy.w[nb/64] & (1ULL << (nb%64)))
+            if (liberties[find(nb)] == 1) return true;
+    }
+    return false;
+}
+
 bitboard boardstate::legalMoves(const std::unordered_set<uint64_t>& history) const {
     bitboard moves;
     for(int i = 0; i < 6; ++i)
@@ -270,11 +287,27 @@ bool boardstate::isTerminal() const {
   }
 
 float boardstate::score(float komi) const {
-    // simple territory count using flood fill from empty points
-    // for now just count stones (area scoring)
     float blackScore = black.countStones();
-    float whiteScore = white.countStones() + komi;
-    return blackScore - whiteScore;  // positive = black wins
+    float whiteScore = white.countStones();
+
+    // count empty points surrounded by only one color
+    for (int i = 0; i < 361; i++) {
+        if (!(empty.w[i/64] & (1ULL << (i%64)))) continue;
+        // flood fill from this empty point
+        bool touchesBlack = false, touchesWhite = false;
+        // check 4 neighbors
+        int nbrs[4];
+        int nbCount = getNeighbors(i, nbrs);
+        for (int k = 0; k < nbCount; k++) {
+            int nb = nbrs[k];
+            if (black.w[nb/64] & (1ULL << (nb%64))) touchesBlack = true;
+            if (white.w[nb/64] & (1ULL << (nb%64))) touchesWhite = true;
+        }
+        if (touchesBlack && !touchesWhite) blackScore++;
+        else if (touchesWhite && !touchesBlack) whiteScore++;
+    }
+
+    return blackScore - whiteScore - komi;
   }
 
 

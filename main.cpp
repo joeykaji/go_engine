@@ -32,12 +32,12 @@ int main(){
     boardstate b{};
     b.blackMove = true;
     std::unordered_set<uint64_t> history;
-    MCTS mcts(1.41, 6.5f);
+    MCTS mcts("gonet.pt", 1.41, 6.5f);
     while(b.passCount < 2){
       auto start = std::chrono::high_resolution_clock::now();
         int move = mcts.getBestMove(b, history, 1000);
         auto end = std::chrono::high_resolution_clock::now();
-        std::cout << "1000 iterations: " 
+        std::cout << "10000 iterations: " 
           << std::chrono::duration_cast<std::chrono::milliseconds>(end-start).count() 
           << "ms\n";
         history.insert(b.zobristHash);
