@@ -17,7 +17,6 @@ class GoDataset(Dataset):
         return len(self.values)
 
     def __getitem__(self, idx):
-        # reads only this slice from disk — no full load into RAM
         s = torch.from_numpy(self.states[idx].copy()).float()
         p = torch.tensor(self.policies[idx], dtype=torch.long)
         v = torch.tensor(self.values[idx],   dtype=torch.float32).unsqueeze(0)
@@ -36,12 +35,15 @@ values   = np.memmap("data/values.npy",   dtype="float32", mode="r",
                      shape=(N,))
 
 dataset = GoDataset(states, policies, values)
-loader  = DataLoader(dataset, batch_size=256, shuffle=True,
-                     num_workers=4, pin_memory=True)
+loader = DataLoader(dataset, batch_size=256, shuffle=True,
+                    num_workers=0, pin_memory=False)  # num_workers=0 runs in main process
 
 # ── model ─────────────────────────────────────────────────────────────────────
 
-model = GoNet()
+device = torch.device("mps" if torch.backends.mps.is_available() else "cpu")
+print(f"Using device: {device}")
+
+model          = GoNet().to(device)
 optimizer      = torch.optim.Adam(model.parameters(), lr=1e-3)
 policy_loss_fn = nn.CrossEntropyLoss()
 value_loss_fn  = nn.MSELoss()
@@ -52,6 +54,10 @@ print("Training...")
 for epoch in range(10):
     total_loss = 0
     for states_b, policies_b, values_b in loader:
+        states_b   = states_b.to(device)
+        policies_b = policies_b.to(device)
+        values_b   = values_b.to(device)
+
         optimizer.zero_grad()
         policy_out, value_out = model(states_b)
         loss = policy_loss_fn(policy_out, policies_b) + \
@@ -59,6 +65,7 @@ for epoch in range(10):
         loss.backward()
         optimizer.step()
         total_loss += loss.item()
+
     print(f"Epoch {epoch+1}/10  loss: {total_loss/len(loader):.4f}")
 
 # ── save ──────────────────────────────────────────────────────────────────────

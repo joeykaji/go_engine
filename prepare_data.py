@@ -46,11 +46,17 @@ class SimpleBoard:
         self.board = np.zeros((19, 19), dtype=np.int8)
         self.turn  = 1
 
-    def encode(self, out):
-        """Write directly into a pre-allocated (3,19,19) float32 array."""
-        out[0] = (self.board == 1)
-        out[1] = (self.board == 2)
-        out[2] = float(self.turn == 1)
+    def encode(self, out, winner):
+        if self.turn == 1:  # black to play
+            out[0] = (self.board == 1)  # current player
+            out[1] = (self.board == 2)  # opponent
+            out[2] = 1.0
+            return 1.0 if winner == "B" else -1.0
+        else:  # white to play
+            out[0] = (self.board == 2)  # current player
+            out[1] = (self.board == 1)  # opponent
+            out[2] = 0.0
+            return 1.0 if winner == "W" else -1.0 
 
     def get_group_and_liberties(self, row, col):
         color = self.board[row, col]
@@ -138,12 +144,10 @@ def encode_all(valid_files, total_positions, out_dir):
 
         board = SimpleBoard()
         for color_str, pos in moves:
-            # encode directly into memmap slot — no intermediate array
-            board.encode(states[idx])
+            values[idx] = board.encode(states[idx], winner)  # encode returns value
             policies[idx] = pos_to_idx(pos)
-            values[idx]   = value
             idx += 1
-            board.play(color_map[color_str], pos)
+            board.play(color_map[color_str], pos) 
 
         if game_num % 1000 == 0:
             print(f"  {game_num}/{len(valid_files)} games  "
