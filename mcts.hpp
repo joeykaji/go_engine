@@ -5,9 +5,9 @@
 #include <unordered_set>
 #include <cmath>
 #include <algorithm>
-#include <random>
 #include "boardstate.hpp"
-#include "network.hpp"
+#include <torch/script.h>
+
 
 class MCTS {
 public:
@@ -23,9 +23,9 @@ public:
           : pos(pos), prior(prior), parent(parent) {}
     };
 
-    MCTS(const std::string& modelPath,
-         double explorationConstant = 1.41,
-         float komi = 6.5f);
+    MCTS(double explorationConstant = 1.41,
+         float komi = 6.5f,
+         const std::string& modelPath = "gonet.pt");
 
     int getBestMove(const boardstate& root,
                     const std::unordered_set<uint64_t>& history,
@@ -34,7 +34,9 @@ public:
 private:
     double C;
     float komi;
-    GoNetwork net;  // neural network
+    torch::jit::script::Module model;
+    std::mt19937 rng{42};
+    std::pair<std::vector<float>, float> evalPosition(const boardstate& state);
 
     MCTSNode* select(MCTSNode* node,
                      const boardstate& rootState,
@@ -42,18 +44,11 @@ private:
                      boardstate& outState,
                      std::unordered_set<uint64_t>& outHistory);
 
-    // now uses policy priors from network
     MCTSNode* bestPUCTChild(MCTSNode* node);
-
-    // now sets prior probabilities from network policy head
-    double expand(MCTSNode* node, const boardstate& state,
-                const std::unordered_set<uint64_t>& history);
-
-    // replaced by network value head
-    double evaluate(const boardstate& state);
-
-    void backpropagate(MCTSNode* node, double result);
-    std::mt19937 rng{42};
+    void      expand(MCTSNode* node, const boardstate& state,
+                     const std::unordered_set<uint64_t>& history,
+                     const std::vector<float>& policy);
+    void      backpropagate(MCTSNode* node, double result);
 };
 
 #endif
