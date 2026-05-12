@@ -1,3 +1,5 @@
 *.npy
 kgs_data/
 data/
+all_games/
+checkpoint.pt

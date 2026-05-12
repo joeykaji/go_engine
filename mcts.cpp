@@ -4,6 +4,7 @@
 MCTS::MCTS(double explorationConstant, float komi, const std::string& modelPath)
     : C(explorationConstant), komi(komi) {
     model = torch::jit::load(modelPath);
+    model.to(torch::Device("mps"));
     model.eval();
 }
 
@@ -19,9 +20,13 @@ std::pair<std::vector<float>, float> MCTS::evalPosition(const boardstate& state)
             acc[0][2][r][c] = state.blackMove ? 1.0f : 0.0f;
         }
     }
+    tensor = tensor.to(torch::Device("mps"));
     auto output = model.forward({tensor}).toTuple();
-    auto policy = torch::softmax(output->elements()[0].toTensor(), 1)[0];
-    float value = output->elements()[1].toTensor().item<float>();
+    auto policy_tensor = output->elements()[0].toTensor().to(torch::kCPU);
+    auto value_tensor  = output->elements()[1].toTensor().to(torch::kCPU);
+
+    auto policy = torch::softmax(policy_tensor, 1)[0];
+    float value = value_tensor.item<float>();
     std::vector<float> policyVec(362);
     for (int i = 0; i < 362; i++)
         policyVec[i] = policy[i].item<float>();
@@ -36,8 +41,15 @@ MCTS::MCTSNode* MCTS::select(MCTSNode* node,
     while (node->expanded && !node->children.empty()) {
         node = bestPUCTChild(node);
         outHistory.insert(outState.zobristHash);
-        if (node->pos == -1) outState = outState.makePass();
-        else outState = outState.makeMove(node->pos);
+        if (node->pos == -1) {
+            outState = outState.makePass();
+        } else {
+            if (node->pos < 0 || node->pos >= 361) {
+                std::cerr << "Invalid pos in select: " << node->pos << "\n";
+                break;
+            }
+            outState = outState.makeMove(node->pos);
+        }
     }
     return node;
 }
@@ -109,8 +121,5 @@ int MCTS::getBestMove(const boardstate& root,
             best = child.get();
         }
     }
-    std::cout << "Total children: " << rootNode->children.size() << "\n";
-    std::cout << "Best pos: " << (best ? best->pos : -1)
-              << " visits: " << bestVisits << "\n";
     return best ? best->pos : -1;
 }

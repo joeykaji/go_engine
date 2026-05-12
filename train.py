@@ -59,7 +59,7 @@ if os.path.exists(checkpoint_path):
 # ── training loop ─────────────────────────────────────────────────────────────
 
 print("Training...")
-for epoch in range(start_epoch, 30):
+for epoch in range(start_epoch, 60):
     indices = np.random.choice(N, subset_size, replace=False)
     sampler = SubsetRandomSampler(indices)
     loader  = DataLoader(dataset, batch_size=256, sampler=sampler,

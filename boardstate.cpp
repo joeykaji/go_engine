@@ -287,26 +287,42 @@ bool boardstate::isTerminal() const {
   }
 
 float boardstate::score(float komi) const {
-    float blackScore = black.countStones();
-    float whiteScore = white.countStones();
+    float blackScore = 0, whiteScore = 0;
+    bool visited[361] = {};
 
-    // count empty points surrounded by only one color
-    for (int i = 0; i < 361; i++) {
-        if (!(empty.w[i/64] & (1ULL << (i%64)))) continue;
-        // flood fill from this empty point
-        bool touchesBlack = false, touchesWhite = false;
-        // check 4 neighbors
-        int nbrs[4];
-        int nbCount = getNeighbors(i, nbrs);
-        for (int k = 0; k < nbCount; k++) {
-            int nb = nbrs[k];
-            if (black.w[nb/64] & (1ULL << (nb%64))) touchesBlack = true;
-            if (white.w[nb/64] & (1ULL << (nb%64))) touchesWhite = true;
+    for (int start = 0; start < 361; start++) {
+        if (visited[start]) continue;
+        if (!(empty.w[start/64] & (1ULL << (start%64)))) {
+            // count stones directly
+            if (black.w[start/64] & (1ULL << (start%64))) blackScore++;
+            else whiteScore++;
+            visited[start] = true;
+            continue;
         }
-        if (touchesBlack && !touchesWhite) blackScore++;
-        else if (touchesWhite && !touchesBlack) whiteScore++;
+        // flood fill empty region
+        int region[361]; int rcount = 0;
+        bool touchesBlack = false, touchesWhite = false;
+        int stack[722]; int top = 0;  // double size to be safe
+        visited[start] = true;
+        stack[top++] = start;
+        while (top > 0) {
+          int pos = stack[--top];
+          if (visited[pos]) continue;
+          visited[pos] = true;
+          if (empty.w[pos/64] & (1ULL << (pos%64))) {
+            region[rcount++] = pos;
+            int nbrs[4]; int nc = getNeighbors(pos, nbrs);
+            for (int k = 0; k < nc; k++) stack[top++] = nbrs[k];
+          } else {
+            if (black.w[pos/64] & (1ULL << (pos%64))) touchesBlack = true;
+            else touchesWhite = true;
+          }
+        }
+        for (int k = 0; k < rcount; k++) {
+            if (touchesBlack && !touchesWhite) blackScore++;
+            else if (touchesWhite && !touchesBlack) whiteScore++;
+        }
     }
-
     return blackScore - whiteScore - komi;
   }
 

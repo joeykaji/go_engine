@@ -17,7 +17,7 @@ struct boardstate{
   int blackCaptures;
   int whiteCaptures;
   uint16_t parent[361];
-  uint8_t  liberties[361];
+  int  liberties[361];
   uint16_t size[361];
   uint16_t next[361];
   
